@@ -227,6 +227,7 @@ class MCoreGemma3VLModel(MegatronModule):
         self.max_seq_len = language_transformer_config.seq_length
         self.model_type = ModelType.encoder_or_decoder
         self.image_token_id = vision_transformer_config.image_token_id
+        self.vocab_size = language_transformer_config.vocab_size
 
         # This attribute is needed to check if an all-reduce is required
         # on the word embeddings inside `finalize_model_grads._allreduce_word_embedding_grads`.
@@ -400,8 +401,14 @@ class MCoreGemma3VLModel(MegatronModule):
 
         ### Compute language embedding
         if self.pre_process:
+            safe_input_ids = input_ids
+            # Replace image_token_id with 0 to avoid embedding index error
+            if self.image_token_id >= self.vocab_size:
+                image_token_mask = input_ids == self.image_token_id
+                safe_input_ids = input_ids.clone()
+                safe_input_ids[image_token_mask] = 0
             # (T, B, D)
-            language_embedding = self.language_model.embedding(input_ids=input_ids, position_ids=position_ids)
+            language_embedding = self.language_model.embedding(input_ids=safe_input_ids, position_ids=position_ids)
             # (B, T, D)
             language_embedding = language_embedding.transpose(1, 0).contiguous()
         else:
@@ -421,11 +428,6 @@ class MCoreGemma3VLModel(MegatronModule):
             )
         else:
             combined_embedding = combined_embedding.transpose(1, 0).contiguous()
-
-        print("================ final inputs")
-        print(f"combined_embedding={combined_embedding.shape} {combined_embedding.dtype}")
-        print(f"attention_mask={attention_mask.shape} {attention_mask.dtype}")
-        print(f"labels={labels.shape} {labels.dtype}")
 
         ### Run decoder model
         output = self.language_model(
